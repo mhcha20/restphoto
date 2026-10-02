@@ -98,10 +98,12 @@ export async function syncPhotosStreamHandler(req: Request, res: Response) {
     // Persist to DB
     await upsertPhotoCacheBatch(rows);
     const activeFileIds = new Set(rows.map((r) => r.fileId));
-    const deletedCount = await prunePhotoCache(activeFileIds);
+    const failedIds = new Set(tree.failedFolderIds ?? []);
+    // 只有完整爬取成功才 prune；局部失敗時保留舊快取，避免誤刪
+    const deletedCount = failedIds.size === 0 ? await prunePhotoCache(activeFileIds) : 0;
 
     // Sync region_cache
-    const regionRows: InsertRegionCache[] = tree.regions.map((region) => {
+    const regionRows: InsertRegionCache[] = tree.regions.filter((r) => !failedIds.has(r.id)).map((region) => {
       const uniqueRestaurants = new Set(region.photos.map((p) => p.restaurantName));
       const subRegionNames = Array.from(
         new Set(region.photos.map((p) => p.subRegion).filter((s): s is string => !!s))
@@ -120,6 +122,7 @@ export async function syncPhotosStreamHandler(req: Request, res: Response) {
       totalPhotos: rows.length,
       totalRegions: tree.regions.length,
       deletedPhotos: deletedCount,
+      partial: failedIds.size > 0,
       syncedAt: new Date().toISOString(),
     });
   } catch (error) {

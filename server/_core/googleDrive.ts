@@ -43,6 +43,8 @@ export interface CrawlResult {
   regions: DriveRegion[];
   fetchedAt: number;
   totalPhotos: number;
+  /** 讀取失敗的地區／子地區 folder ID；非空代表爬取不完整，不可 prune 舊快取。 */
+  failedFolderIds?: string[];
 }
 
 // 保留舊介面以維持向後相容（測試和路由可能還在用）
@@ -307,6 +309,7 @@ export async function crawlDriveTree(): Promise<CrawlResult> {
   const regionsRaw = parseSubFolders(rootHtml, ROOT_FOLDER_ID);
 
   const regions: DriveRegion[] = [];
+  const failedFolderIds: string[] = [];
   let totalPhotos = 0;
 
   for (const region of regionsRaw) {
@@ -359,6 +362,7 @@ export async function crawlDriveTree(): Promise<CrawlResult> {
           }
           await new Promise((r) => setTimeout(r, 200));
         } catch (subErr) {
+          failedFolderIds.push(region.id);
           console.warn(
             `[GoogleDrive] Failed to fetch sub-region ${region.name}/${sub.title}:`,
             subErr
@@ -378,6 +382,7 @@ export async function crawlDriveTree(): Promise<CrawlResult> {
       // 友善節流，避免被 Drive 限速
       await new Promise((r) => setTimeout(r, 300));
     } catch (err) {
+      failedFolderIds.push(region.id);
       console.warn(
         `[GoogleDrive] Failed to fetch region ${region.name}:`,
         err
@@ -396,6 +401,7 @@ export async function crawlDriveTree(): Promise<CrawlResult> {
     regions,
     fetchedAt: Date.now(),
     totalPhotos,
+    failedFolderIds,
   };
   cachedResult = result;
   return result;
@@ -516,6 +522,7 @@ export async function crawlDriveTreeWithProgress(
   const regionsRaw = parseSubFolders(rootHtml, ROOT_FOLDER_ID);
   const totalRegions = regionsRaw.length;
   const regions: DriveRegion[] = [];
+  const failedFolderIds: string[] = [];
   let totalPhotos = 0;
 
   onProgress({ type: "start", totalRegions });
@@ -562,6 +569,7 @@ export async function crawlDriveTreeWithProgress(
           }
           await new Promise((r) => setTimeout(r, 200));
         } catch (subErr) {
+          failedFolderIds.push(region.id);
           console.warn(`[GoogleDrive] Failed to fetch sub-region ${region.name}/${sub.title}:`, subErr);
         }
       }
@@ -583,6 +591,7 @@ export async function crawlDriveTreeWithProgress(
       });
       await new Promise((r) => setTimeout(r, 300));
     } catch (err) {
+      failedFolderIds.push(region.id);
       console.warn(`[GoogleDrive] Failed to fetch region ${region.name}:`, err);
       regions.push({ id: region.id, name: region.name, photoCount: 0, photos: [], subRegions: [] });
       onProgress({
@@ -596,7 +605,7 @@ export async function crawlDriveTreeWithProgress(
     }
   }
 
-  const result: CrawlResult = { regions, fetchedAt: Date.now(), totalPhotos };
+  const result: CrawlResult = { regions, fetchedAt: Date.now(), totalPhotos, failedFolderIds };
   cachedResult = result;
   return result;
 }
