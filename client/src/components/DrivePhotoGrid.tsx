@@ -43,7 +43,7 @@ function DrivePhotoGridBase({ photos, onPhotoClick }: DrivePhotoGridProps) {
           {/* Image Container */}
           <div className="relative aspect-square bg-slate-100 overflow-hidden">
             <OptimizedImage
-              src={photo.thumbnailUrl}
+              src={`/api/thumb/${photo.id}?w=480`}
               alt={photo.restaurantName}
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out"
             />

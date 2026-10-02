@@ -1147,7 +1147,7 @@ export default function GoogleDriveDashboard() {
             <div className="relative bg-stone-50 flex items-center justify-center min-h-[60vh] max-h-[80vh]">
               <OptimizedImage
                 key={`${previewPhoto.id}-${effectUrl ?? "orig"}`}
-                src={effectUrl ?? previewPhoto.thumbnailUrl.replace("w800", "w1600")}
+                src={effectUrl ?? `/api/thumb/${previewPhoto.id}?w=1280`}
                 alt={previewPhoto.restaurantName}
                 center
                 className="max-w-full max-h-[80vh] object-contain mx-auto"

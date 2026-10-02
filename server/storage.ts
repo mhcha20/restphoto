@@ -1,6 +1,6 @@
 // S3-compatible object storage (AWS S3, Cloudflare R2, Railway buckets, ...).
 // Only used by the legacy photo upload module; the Google Drive dashboard does not need it.
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { ENV } from "./_core/env";
 
@@ -65,4 +65,44 @@ export async function storageGetSignedUrl(relKey: string): Promise<string> {
     new GetObjectCommand({ Bucket: ENV.s3Bucket, Key: key }),
     { expiresIn: 3600 }
   );
+}
+
+/** True when S3/R2 credentials and bucket are configured. */
+export function storageConfigured(): boolean {
+  return !!(ENV.s3Bucket && ENV.s3AccessKeyId && ENV.s3SecretAccessKey);
+}
+
+export async function storageExists(relKey: string): Promise<boolean> {
+  try {
+    await getClient().send(
+      new HeadObjectCommand({ Bucket: ENV.s3Bucket, Key: normalizeKey(relKey) })
+    );
+    return true;
+  } catch (error: any) {
+    if (error?.$metadata?.httpStatusCode === 404 || error?.name === "NotFound") return false;
+    throw error;
+  }
+}
+
+/** Upload under an exact key (no hash suffix) with long-lived cache headers. */
+export async function storagePutExact(
+  relKey: string,
+  data: Buffer | Uint8Array,
+  contentType: string,
+  cacheControl = "public, max-age=31536000, immutable"
+): Promise<void> {
+  await getClient().send(
+    new PutObjectCommand({
+      Bucket: ENV.s3Bucket,
+      Key: normalizeKey(relKey),
+      Body: data,
+      ContentType: contentType,
+      CacheControl: cacheControl,
+    })
+  );
+}
+
+/** Public (CDN) URL for a key; empty string when S3_PUBLIC_URL is not configured. */
+export function storagePublicUrl(relKey: string): string {
+  return ENV.s3PublicUrl ? `${ENV.s3PublicUrl}/${normalizeKey(relKey)}` : "";
 }

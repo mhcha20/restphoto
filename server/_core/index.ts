@@ -9,6 +9,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { syncGoogleDriveHandler, startDailySyncScheduler } from "./scheduledHandlers";
 import { syncPhotosStreamHandler } from "../syncPhotosStream";
+import { registerThumbnailRoute } from "../thumbnails";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -49,6 +50,8 @@ async function startServer() {
   app.post("/api/scheduled/syncGoogleDrive", syncGoogleDriveHandler);
   // SSE: real-time sync progress stream
   app.get("/api/sync-photos-stream", syncPhotosStreamHandler);
+  // Thumbnail cache (Drive -> resized WebP in Cloudflare R2)
+  registerThumbnailRoute(app);
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
