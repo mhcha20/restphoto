@@ -1,0 +1,62 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1780239692500,
+      "tag": "0000_exotic_molten_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1780239798184,
+      "tag": "0001_soft_the_captain",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1780321116053,
+      "tag": "0002_wealthy_sentinels",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1780416421386,
+      "tag": "0003_sleepy_jack_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1780663917734,
+      "tag": "0004_fuzzy_pestilence",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1782106507371,
+      "tag": "0005_yellow_blob",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1783560802507,
+      "tag": "0006_special_karen_page",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1783562212161,
+      "tag": "0007_certain_angel",
+      "breakpoints": true
+    }
+  ]
+}

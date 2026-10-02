@@ -1,0 +1,2 @@
+ALTER TABLE `restaurant_translations` ADD `isManual` int DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE `users` ADD `accessStatus` enum('pending','approved','rejected') DEFAULT 'pending' NOT NULL;
