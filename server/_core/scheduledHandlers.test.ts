@@ -1,17 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("./env", () => ({ ENV: { cronSecret: "test-secret", dailySyncEnabled: false } }));
+
 import { syncGoogleDriveHandler } from "./scheduledHandlers";
+import { crawlDriveTree } from "./googleDrive";
+import { prunePhotoCache, upsertRegionCacheBatch } from "../db";
 
 // Mock db helpers
 vi.mock("../db", () => ({
   upsertPhotoCacheBatch: vi.fn(async () => undefined),
   prunePhotoCache: vi.fn(async () => 0),
   upsertRegionCacheBatch: vi.fn(async () => undefined),
-}));
-
-vi.mock("./sdk", () => ({
-  sdk: {
-    authenticateRequest: vi.fn(),
-  },
 }));
 
 vi.mock("./googleDrive", () => ({
@@ -36,7 +35,6 @@ vi.mock("./googleDrive", () => ({
   invalidateCache: vi.fn(),
 }));
 
-import { sdk } from "./sdk";
 
 function buildRes() {
   const res: any = {};
@@ -45,55 +43,58 @@ function buildRes() {
   return res;
 }
 
+const authed = (secret = "test-secret"): any => ({
+  url: "/api/scheduled/syncGoogleDrive",
+  headers: { authorization: `Bearer ${secret}` },
+});
+
 describe("syncGoogleDriveHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("returns 403 when request is not authenticated as cron", async () => {
-    (sdk.authenticateRequest as any).mockResolvedValue({
-      isCron: false,
-      taskUid: null,
-    });
-    const req: any = { url: "/api/scheduled/syncGoogleDrive" };
+  it("returns 403 without a valid CRON_SECRET", async () => {
     const res = buildRes();
-
-    await syncGoogleDriveHandler(req, res);
-
+    await syncGoogleDriveHandler({ url: "/x", headers: {} } as any, res);
     expect(res.status).toHaveBeenCalledWith(403);
-    expect(res.json).toHaveBeenCalledWith({ error: "cron-only endpoint" });
+
+    const res2 = buildRes();
+    await syncGoogleDriveHandler(authed("wrong-secret"), res2);
+    expect(res2.status).toHaveBeenCalledWith(403);
+    expect(prunePhotoCache).not.toHaveBeenCalled();
   });
 
-  it("returns sync result when authenticated as cron", async () => {
-    (sdk.authenticateRequest as any).mockResolvedValue({
-      isCron: true,
-      taskUid: "task_abc",
-    });
-    const req: any = { url: "/api/scheduled/syncGoogleDrive" };
+  it("returns sync result with a valid CRON_SECRET", async () => {
     const res = buildRes();
+    await syncGoogleDriveHandler(authed(), res);
 
-    await syncGoogleDriveHandler(req, res);
-
-    expect(res.json).toHaveBeenCalled();
     const arg = (res.json as any).mock.calls[0][0];
     expect(arg.ok).toBe(true);
     expect(arg.result.success).toBe(true);
-    expect(arg.result.taskUid).toBe("task_abc");
     expect(arg.result.totalRegions).toBe(1);
     expect(arg.result.totalPhotos).toBe(1);
+    expect(arg.result.partial).toBe(false);
+    expect(prunePhotoCache).toHaveBeenCalledTimes(1);
   });
 
-  it("returns 500 with error info when authentication throws", async () => {
-    (sdk.authenticateRequest as any).mockRejectedValue(
-      new Error("auth failed")
-    );
-    const req: any = { url: "/api/scheduled/syncGoogleDrive" };
+  it("does not prune photo_cache or overwrite region_cache when the crawl is partial", async () => {
+    const full = await (crawlDriveTree as any)();
+    (crawlDriveTree as any).mockResolvedValueOnce({ ...full, failedFolderIds: ["r1"] });
     const res = buildRes();
+    await syncGoogleDriveHandler(authed(), res);
 
-    await syncGoogleDriveHandler(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(500);
     const arg = (res.json as any).mock.calls[0][0];
-    expect(arg.error).toBe("auth failed");
+    expect(arg.result.partial).toBe(true);
+    expect(arg.result.deletedPhotos).toBe(0);
+    expect(prunePhotoCache).not.toHaveBeenCalled();
+    expect((upsertRegionCacheBatch as any).mock.calls[0][0]).toEqual([]);
+  });
+
+  it("returns 500 when the sync throws", async () => {
+    (crawlDriveTree as any).mockRejectedValueOnce(new Error("drive down"));
+    const res = buildRes();
+    await syncGoogleDriveHandler(authed(), res);
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect((res.json as any).mock.calls[0][0].error).toBe("drive down");
   });
 });
