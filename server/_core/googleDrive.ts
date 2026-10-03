@@ -407,7 +407,9 @@ export async function crawlDriveTree(): Promise<CrawlResult> {
   return result;
 }
 
-/** 取得快取的爬蟲結果，過期則重新爬 */
+let inflightCrawl: Promise<CrawlResult> | null = null;
+
+/** 取得快取的爬蟲結果，過期則重新爬（同時多個請求只會爬一次） */
 export async function getDriveTree(forceRefresh = false): Promise<CrawlResult> {
   if (
     !forceRefresh &&
@@ -416,7 +418,10 @@ export async function getDriveTree(forceRefresh = false): Promise<CrawlResult> {
   ) {
     return cachedResult;
   }
-  return await crawlDriveTree();
+  inflightCrawl ??= crawlDriveTree().finally(() => {
+    inflightCrawl = null;
+  });
+  return await inflightCrawl;
 }
 
 /** 取得所有地區的精簡列表（給按鈕用，含相片張數與去重後餐廳間數、子地區清單） */

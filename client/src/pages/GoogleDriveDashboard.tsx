@@ -182,9 +182,16 @@ export default function GoogleDriveDashboard() {
   });
 
   // 全域唯一餐廳數（不受地區篩選影響，用於 header 統計）
-  const { data: allRestaurants = [] } = trpc.googleDrive.getRestaurants.useQuery({
-    regionId: null,
-  });
+  // 只用於統計數字，延後少少先載入，令相片同篩選器優先出現
+  const [secondaryReady, setSecondaryReady] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSecondaryReady(true), 800);
+    return () => clearTimeout(t);
+  }, []);
+  const { data: allRestaurants = [] } = trpc.googleDrive.getRestaurants.useQuery(
+    { regionId: null },
+    { enabled: secondaryReady }
+  );
 
   // 取得目前（依地區）可選的環境清單，用來建環境多選 checkbox
   const { data: envData } = trpc.googleDrive.getEnvironments.useQuery({

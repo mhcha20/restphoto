@@ -575,6 +575,55 @@ export async function getPhotosCached(opts: {
 }
 
 /**
+ * 從 photo_cache 取得去重餐廳名稱（可按地區／子地區）。
+ * 取代原本「爬整個 Drive 目錄樹」嘅做法，毫秒級回應。
+ */
+export async function getRestaurantNamesCached(opts: {
+  regionId?: string | null;
+  subRegion?: string | null;
+}): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions: ReturnType<typeof eq>[] = [];
+  if (opts.regionId) conditions.push(eq(photoCache.regionId, opts.regionId));
+  if (opts.subRegion) conditions.push(eq(photoCache.subRegionName, opts.subRegion));
+  try {
+    const rows = await db
+      .selectDistinct({ name: photoCache.restaurantName })
+      .from(photoCache)
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
+    return rows.map((r) => r.name.trim()).filter((n) => n.length > 0);
+  } catch (error) {
+    console.warn("[Database] getRestaurantNamesCached failed:", error);
+    return [];
+  }
+}
+
+/** 從 photo_cache 取得（可按地區）去重環境清單，以及是否存在室內（無環境）相片。 */
+export async function getEnvironmentsCached(opts: {
+  regionId?: string | null;
+}): Promise<{ environments: string[]; hasIndoor: boolean }> {
+  const db = await getDb();
+  if (!db) return { environments: [], hasIndoor: false };
+  try {
+    const rows = await db
+      .selectDistinct({ environment: photoCache.environment })
+      .from(photoCache)
+      .where(opts.regionId ? eq(photoCache.regionId, opts.regionId) : undefined);
+    const environments: string[] = [];
+    let hasIndoor = false;
+    for (const r of rows) {
+      if (r.environment === null || r.environment === "") hasIndoor = true;
+      else environments.push(r.environment);
+    }
+    return { environments, hasIndoor };
+  } catch (error) {
+    console.warn("[Database] getEnvironmentsCached failed:", error);
+    return { environments: [], hasIndoor: false };
+  }
+}
+
+/**
  * 取得 photo_cache 的統計資訊（總相片數、地區數、餐廳數、最後同步時間）。
  */
 export async function getPhotoCacheStats(): Promise<{

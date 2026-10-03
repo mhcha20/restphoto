@@ -8,7 +8,12 @@ import App from "./App";
 import { getLoginUrl } from "./const";
 import "./index.css";
 
-const queryClient = new QueryClient();
+// 資料只會喺「同步快取」後改變，所以 5 分鐘內重複進入頁面直接用快取，唔重新 fetch
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false },
+  },
+});
 
 const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;

@@ -1,5 +1,5 @@
 import { router, protectedProcedure, approvedProcedure, adminProcedure } from "../_core/trpc";
-import { setManualTranslation, upsertPhotoCacheBatch, prunePhotoCache, getPhotosCached, getPhotoCacheStats, upsertRegionCacheBatch, getRegionsCached, getSubRegionsCached } from "../db";
+import { setManualTranslation, upsertPhotoCacheBatch, prunePhotoCache, getPhotosCached, getPhotoCacheStats, getRestaurantNamesCached, getEnvironmentsCached, upsertRegionCacheBatch, getRegionsCached, getSubRegionsCached } from "../db";
 import { clearTranslationMemoryCache } from "../_core/translation";
 import { z } from "zod";
 import {
@@ -212,7 +212,7 @@ export const googleDriveRouter = router({
 
       // 附帶英文名（自動翻譯 + 快取）
       const names = Array.from(new Set(result.items.map((p) => p.restaurantName)));
-      const enMap = await translateRestaurantNames(names);
+      const enMap = await translateRestaurantNames(names, { wait: false });
 
       const items = result.items.map((p) => ({
         id: p.fileId,
@@ -336,7 +336,7 @@ export const googleDriveRouter = router({
         });
         // 附帶英文名（自動翻譯 + 快取）
         const names = photos.map((p) => p.restaurantName);
-        const enMap = await translateRestaurantNames(names);
+        const enMap = await translateRestaurantNames(names, { wait: false });
         const withEn = photos
           .filter((p) => matchEnv(p.environment))
           .map((p) => ({
@@ -405,10 +405,16 @@ export const googleDriveRouter = router({
       };
 
       try {
-        const photos = await listPhotos({ regionId, subRegion });
-        const list = dedupe(photos);
-        // 附帶英文名（自動翻譯 + 快取）
-        const enMap = await translateRestaurantNames(list.map((r) => r.name));
+        // 優先讀 photo_cache（資料庫，毫秒級）；快取未同步先退回爬 Drive
+        let list: { name: string }[];
+        const cachedNames = await getRestaurantNamesCached({ regionId, subRegion });
+        if (cachedNames.length > 0 || (await getPhotoCacheStats()).totalPhotos > 0) {
+          list = dedupe(cachedNames.map((restaurantName) => ({ restaurantName })));
+        } else {
+          list = dedupe(await listPhotos({ regionId, subRegion }));
+        }
+        // 附帶英文名（只讀快取；缺失者喺背景翻譯，唔阻住回應）
+        const enMap = await translateRestaurantNames(list.map((r) => r.name), { wait: false });
         return list.map((r) => ({
           name: r.name,
           nameEn: enMap.get(r.name.trim()) ?? null,
@@ -440,6 +446,16 @@ export const googleDriveRouter = router({
     .query(async ({ input }) => {
       const regionId = input?.regionId ?? null;
       try {
+        const cached = await getEnvironmentsCached({ regionId });
+        if (cached.environments.length > 0 || cached.hasIndoor) {
+          return {
+            environments: sortEnvironments(cached.environments),
+            hasIndoor: cached.hasIndoor,
+          };
+        }
+        if ((await getPhotoCacheStats()).totalPhotos > 0) {
+          return { environments: [] as string[], hasIndoor: false };
+        }
         const photos = await listPhotos({ regionId });
         const set = new Set<string>();
         let hasIndoor = false;
