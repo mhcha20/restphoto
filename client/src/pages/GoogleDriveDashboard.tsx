@@ -39,8 +39,18 @@ import {
   ArrowLeft,
   Database,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Menu,
 } from "lucide-react";
 import { Link, useSearch } from "wouter";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
@@ -317,6 +327,12 @@ export default function GoogleDriveDashboard() {
 
   // 決定顯示哪些相片
   const photos: DrivePhoto[] = useFallbackDrive ? fallbackPhotos : allLoadedPhotos;
+  const previewIndex = previewPhoto ? photos.findIndex((p) => p.id === previewPhoto.id) : -1;
+  const goPreview = (delta: number) => {
+    const next = photos[previewIndex + delta];
+    if (next) setPreviewPhoto(next);
+  };
+  const touchStartX = useRef<number | null>(null);
   const photosLoading = useFallbackDrive ? fallbackLoading : pagedLoading;
 
   const utils = trpc.useUtils();
@@ -443,18 +459,27 @@ export default function GoogleDriveDashboard() {
     handleSyncPhotosSSE();
   }, [handleSyncPhotosSSE]);
 
-  // 預覽開啟時：Esc 關閉
+  // 預覽開啟時：Esc 關閉、←/→ 切換相片，並預載前後兩張
   useEffect(() => {
     if (!previewPhoto) return;
+    const idx = photos.findIndex((p) => p.id === previewPhoto.id);
+    for (const n of [photos[idx - 1], photos[idx + 1]]) {
+      if (n) new Image().src = `/api/thumb/${n.id}?w=1280`;
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setPreviewPhoto(null);
         setEditingNameEn(false);
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+        const next = photos[idx + (e.key === "ArrowRight" ? 1 : -1)];
+        if (next) setPreviewPhoto(next);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [previewPhoto]);
+  }, [previewPhoto, photos]);
 
   // 切換相片或關閉預覽時，重設特效狀態（避免殘留上一張的效果圖）
   useEffect(() => {
@@ -592,8 +617,8 @@ export default function GoogleDriveDashboard() {
   return (
     <div className="min-h-screen bg-[#FAF8F5]">
       {/* Elegant Header */}
-      <header className="sticky top-0 z-40 border-b border-stone-200/80 bg-[#FAF8F5]/90 backdrop-blur-md">
-        <div className="container mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+      <header className="lg:sticky top-0 z-40 border-b border-stone-200/80 bg-[#FAF8F5]/95 backdrop-blur-md">
+        <div className="container mx-auto px-4 sm:px-6 py-3 sm:py-6 space-y-3 sm:space-y-5">
           {/* Title row */}
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -606,13 +631,10 @@ export default function GoogleDriveDashboard() {
                   </button>
                 </Link>
               )}
-              <h1
-                className="text-2xl sm:text-3xl font-serif text-stone-900 tracking-tight"
-                style={{ fontFamily: '"Playfair Display", "Noto Serif TC", serif' }}
-              >
-                Restaurant Photo Dashboard
+              <h1 className="font-display text-xl sm:text-3xl font-bold text-stone-900 tracking-tight">
+                餐廳相片 <span className="text-primary">Dashboard</span>
               </h1>
-              <p className="text-xs sm:text-sm text-stone-500 mt-1 tracking-wide">
+              <p className="text-[11px] sm:text-sm text-stone-500 mt-0.5 sm:mt-1 tracking-wide">
                 {cacheStats && cacheStats.totalPhotos > 0 ? (
                   <>
                     快取 {cacheStats.totalPhotos} 張 · {cacheStats.totalRegions} 個地區 · {cacheStats.totalRestaurants} 間餐廳
@@ -625,7 +647,36 @@ export default function GoogleDriveDashboard() {
                 )}
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+            <div className="sm:hidden shrink-0">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="icon" className="h-10 w-10 rounded-full border-stone-300" aria-label="選單">
+                    {isSyncingPhotos ? <Loader2 size={18} className="animate-spin" /> : <Menu size={18} />}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem asChild>
+                    <Link href="/restaurants"><MapPin size={15} className="mr-2" />餐廳清單</Link>
+                  </DropdownMenuItem>
+                  {user?.role === "admin" && (
+                    <DropdownMenuItem asChild>
+                      <Link href="/admin/users"><Users size={15} className="mr-2" />使用者審批</Link>
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem onSelect={() => handleSyncPhotos()} disabled={isSyncingPhotos}>
+                    <Database size={15} className="mr-2" />{isSyncingPhotos ? "同步中…" : "同步快取"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => handleClearFilters()} disabled={!hasActiveFilters}>
+                    <FilterX size={15} className="mr-2" />清除篩選
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => logout()}>
+                    <LogOut size={15} className="mr-2" />登出
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <div className="hidden sm:flex items-center gap-2 shrink-0 flex-wrap justify-end">
               <Link href="/restaurants">
                 <Button
                   variant="outline"
@@ -672,7 +723,7 @@ export default function GoogleDriveDashboard() {
                 onClick={handleSyncPhotos}
                 disabled={isSyncingPhotos}
                 variant="outline"
-                className="border-emerald-300 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-400 transition-all"
+                className="border-orange-300 text-orange-700 hover:bg-orange-50 hover:border-orange-400 transition-all"
                 title={cacheStats?.lastSyncedAt ? `上次同步：${lastSyncedText}` : "同步 Google Drive 相片到資料庫"}
               >
                 {isSyncingPhotos ? (
@@ -696,11 +747,11 @@ export default function GoogleDriveDashboard() {
               {/* 進度列 */}
               <div className="flex items-center gap-2 text-xs mb-1.5">
                 {syncProgress.isStreaming ? (
-                  <Loader2 size={12} className="animate-spin text-emerald-500 shrink-0" />
+                  <Loader2 size={12} className="animate-spin text-orange-500 shrink-0" />
                 ) : (
-                  <Database size={12} className="text-emerald-600 shrink-0" />
+                  <Database size={12} className="text-orange-600 shrink-0" />
                 )}
-                <span className={syncProgress.isStreaming ? "text-stone-500" : "text-emerald-700"}>
+                <span className={syncProgress.isStreaming ? "text-stone-500" : "text-orange-700"}>
                   {syncProgress.isStreaming
                     ? syncProgress.totalRegions > 0
                       ? `已處理 ${syncProgress.completedRegions} / ${syncProgress.totalRegions} 個地區，${syncProgress.totalPhotos} 張相片…`
@@ -721,7 +772,7 @@ export default function GoogleDriveDashboard() {
               {/* 進度條 */}
               <div className="h-1.5 bg-stone-100 rounded-full overflow-hidden mb-2">
                 <div
-                  className="h-full bg-emerald-400 rounded-full transition-all duration-500"
+                  className="h-full bg-orange-400 rounded-full transition-all duration-500"
                   style={{
                     width: syncProgress.isStreaming && syncProgress.totalRegions > 0
                       ? `${Math.round((syncProgress.completedRegions / syncProgress.totalRegions) * 100)}%`
@@ -735,10 +786,10 @@ export default function GoogleDriveDashboard() {
                   {syncProgress.regionProgress.map((r) => (
                     <span
                       key={r.name}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 border border-emerald-200 rounded-full text-xs text-emerald-700 animate-in fade-in duration-300"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-50 border border-orange-200 rounded-full text-xs text-orange-700 animate-in fade-in duration-300"
                     >
                       {r.name}
-                      <span className="text-emerald-500 font-medium">{r.photoCount}</span>
+                      <span className="text-orange-500 font-medium">{r.photoCount}</span>
                     </span>
                   ))}
                 </div>
@@ -757,7 +808,7 @@ export default function GoogleDriveDashboard() {
                 placeholder="輸入餐廳名稱進行搜尋..."
                 value={searchQuery}
                 onChange={(e) => handleSearchChange(e.target.value)}
-                className="pl-11 pr-4 h-11 bg-white border border-stone-200 rounded-full text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:ring-0 focus-visible:ring-0 shadow-sm transition-all"
+                className="pl-11 pr-4 h-11 bg-white border border-stone-200 rounded-full text-stone-900 placeholder:text-stone-400 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/20 shadow-sm transition-all"
                 aria-label="搜尋餐廳名稱"
               />
             </div>
@@ -848,8 +899,8 @@ export default function GoogleDriveDashboard() {
       </header>
 
       {/* Main content — 左侧為相片区，右侧為地區欄 */}
-      <main className="container mx-auto px-4 sm:px-6 py-8 sm:py-10">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_240px] gap-8 lg:gap-10">
+      <main className="container mx-auto px-4 sm:px-6 py-5 sm:py-10">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_240px] gap-4 lg:gap-10">
           {/* 主要內容區（左）*/}
           <div className="min-w-0 lg:order-1 order-2" ref={photosRef}>
         {!showResults ? (
@@ -922,7 +973,7 @@ export default function GoogleDriveDashboard() {
                   variant="outline"
                   onClick={() => setLoadedPages((p) => p + 1)}
                   disabled={isLoadingMore}
-                  className="border-stone-300 text-stone-700 hover:bg-stone-100 px-8"
+                  className="border-stone-300 text-stone-700 hover:bg-stone-100 hover:border-primary/50 px-8 rounded-full h-11"
                 >
                   {isLoadingMore ? (
                     <>
@@ -950,7 +1001,7 @@ export default function GoogleDriveDashboard() {
 
           {/* 地區欄（右）*/}
           <aside className="lg:order-2 order-1">
-            <div className="lg:sticky lg:top-32 space-y-3 lg:max-h-[calc(100vh-9rem)] lg:overflow-y-auto lg:pr-1 lg:pb-4">
+            <div className="lg:sticky lg:top-8 space-y-2 lg:space-y-3 lg:max-h-[calc(100vh-9rem)] lg:overflow-y-auto lg:pr-1 lg:pb-4">
               <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-stone-500">
                 <span className="h-px w-6 bg-stone-300" />
                 地區
@@ -966,18 +1017,18 @@ export default function GoogleDriveDashboard() {
                   尚無資料，請按「手動刷新」載入 Google Drive 內容
                 </div>
               ) : (
-                <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-2 gap-3">
+                <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-4 px-4 pb-1 lg:mx-0 lg:px-0 lg:pb-0 lg:grid lg:grid-cols-2 lg:gap-3 lg:overflow-visible">
                   {/* "All" button */}
                   <button
                     onClick={() => handleSelectRegion(ALL_REGIONS)}
-                    className={`aspect-square flex flex-col items-center justify-center rounded-xl border transition-all duration-200 active:scale-[0.97] ${
+                    className={`shrink-0 min-w-[5.5rem] px-3 py-2 lg:px-0 lg:py-0 lg:aspect-square flex flex-col items-center justify-center rounded-xl border transition-all duration-200 active:scale-[0.97] ${
                       selectedRegionId === ALL_REGIONS
-                        ? "bg-stone-900 text-white border-stone-900 shadow-md"
+                        ? "bg-primary text-primary-foreground border-primary shadow-md"
                         : "bg-white text-stone-700 border-stone-200 hover:border-stone-400 hover:shadow-sm"
                     }`}
                     style={{ transform: "translateZ(0)" }}
                   >
-                    <span className="text-base sm:text-lg font-serif">全部</span>
+                    <span className="text-base sm:text-lg font-display font-bold">全部</span>
                     <span className="text-[10px] mt-1 opacity-70">
                       {regions.reduce((s, r) => s + r.photoCount, 0)} 張 ·{" "}
                       {totalRestaurantCount} 間
@@ -989,15 +1040,15 @@ export default function GoogleDriveDashboard() {
                       <button
                         key={region.id}
                         onClick={() => handleSelectRegion(region.id)}
-                        className={`aspect-square flex flex-col items-center justify-center rounded-xl border transition-all duration-200 active:scale-[0.97] ${
+                        className={`shrink-0 min-w-[5.5rem] px-3 py-2 lg:px-0 lg:py-0 lg:aspect-square flex flex-col items-center justify-center rounded-xl border transition-all duration-200 active:scale-[0.97] ${
                           isActive
-                            ? "bg-stone-900 text-white border-stone-900 shadow-md"
+                            ? "bg-primary text-primary-foreground border-primary shadow-md"
                             : "bg-white text-stone-700 border-stone-200 hover:border-stone-400 hover:shadow-sm"
                         }`}
                       >
                         <MapPin
                           size={16}
-                          className={isActive ? "text-white" : "text-stone-400"}
+                          className={isActive ? "text-white" : "text-primary/60"}
                         />
                         <span className="text-xs sm:text-sm font-medium mt-1.5 tracking-tight">
                           {region.name}
@@ -1131,7 +1182,7 @@ export default function GoogleDriveDashboard() {
       {/* Photo Preview Modal */}
       {previewPhoto && (
         <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8 animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-0 sm:p-8 animate-in fade-in duration-200"
           onClick={() => {
             setPreviewPhoto(null);
             setEditingNameEn(false);
@@ -1142,23 +1193,55 @@ export default function GoogleDriveDashboard() {
               setPreviewPhoto(null);
               setEditingNameEn(false);
             }}
-            className="fixed top-3 right-3 z-[60] p-1.5 bg-white/15 hover:bg-white/30 text-white rounded-full backdrop-blur-sm transition-colors"
+            className="fixed top-3 right-3 z-[60] p-2.5 bg-black/40 hover:bg-black/60 text-white rounded-full backdrop-blur-sm transition-colors"
             aria-label="關閉預覽"
           >
-            <X size={16} />
+            <X size={18} />
           </button>
           <div
-            className="relative max-w-4xl max-h-[90vh] w-full bg-white rounded-lg overflow-hidden shadow-2xl"
+            className="relative max-w-4xl w-full h-full sm:h-auto max-h-full sm:max-h-[92vh] bg-white sm:rounded-2xl overflow-y-auto shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="relative bg-stone-50 flex items-center justify-center min-h-[60vh] max-h-[80vh]">
+            <div
+              className="relative bg-neutral-950 flex items-center justify-center min-h-[45vh] max-h-[62vh] sm:max-h-[72vh] touch-pan-y"
+              onTouchStart={(e) => { touchStartX.current = e.touches[0].clientX; }}
+              onTouchEnd={(e) => {
+                if (touchStartX.current === null) return;
+                const dx = e.changedTouches[0].clientX - touchStartX.current;
+                touchStartX.current = null;
+                if (Math.abs(dx) > 50) goPreview(dx < 0 ? 1 : -1);
+              }}
+            >
               <OptimizedImage
                 key={`${previewPhoto.id}-${effectUrl ?? "orig"}`}
                 src={effectUrl ?? `/api/thumb/${previewPhoto.id}?w=1280`}
                 alt={previewPhoto.restaurantName}
                 center
-                className="max-w-full max-h-[80vh] object-contain mx-auto"
+                className="max-w-full max-h-[62vh] sm:max-h-[72vh] object-contain mx-auto"
               />
+              {previewIndex > 0 && (
+                <button
+                  aria-label="上一張"
+                  onClick={(e) => { e.stopPropagation(); goPreview(-1); }}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 z-10 rounded-full bg-black/40 p-2.5 text-white backdrop-blur transition-colors hover:bg-black/65"
+                >
+                  <ChevronLeft size={22} />
+                </button>
+              )}
+              {previewIndex >= 0 && previewIndex < photos.length - 1 && (
+                <button
+                  aria-label="下一張"
+                  onClick={(e) => { e.stopPropagation(); goPreview(1); }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 z-10 rounded-full bg-black/40 p-2.5 text-white backdrop-blur transition-colors hover:bg-black/65"
+                >
+                  <ChevronRight size={22} />
+                </button>
+              )}
+              {previewIndex >= 0 && (
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/55 px-3 py-1 text-xs text-white backdrop-blur">
+                  {previewIndex + 1} / {photos.length}
+                </div>
+              )}
               {applyEffectMutation.isPending && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/40 backdrop-blur-sm text-white">
                   <Loader2 size={28} className="animate-spin" />
@@ -1228,10 +1311,7 @@ export default function GoogleDriveDashboard() {
             </div>
             <div className="p-4 sm:p-6 flex items-center justify-between gap-4">
               <div>
-                <h2
-                  className="text-xl sm:text-2xl font-serif text-stone-900 tracking-tight"
-                  style={{ fontFamily: '"Playfair Display", "Noto Serif TC", serif' }}
-                >
+                <h2 className="font-display text-xl sm:text-2xl font-bold text-stone-900 tracking-tight">
                   {previewPhoto.restaurantName}
                 </h2>
                 {editingNameEn ? (
