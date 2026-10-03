@@ -21,7 +21,8 @@ export function clearTranslationMemoryCache(): void {
 }
 
 export async function translateRestaurantNames(
-  names: string[]
+  names: string[],
+  opts: { wait?: boolean } = {}
 ): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   const cleaned = Array.from(
@@ -54,6 +55,12 @@ export async function translateRestaurantNames(
     }
   }
   if (missing.length === 0) return result;
+
+  // 讀取路徑唔等 LLM：先回傳已有快取，缺失者喺背景翻譯，下次載入就有
+  if (opts.wait === false) {
+    scheduleBackgroundTranslation(missing);
+    return result;
+  }
 
   // 3. LLM 批次翻譯
   try {
@@ -150,4 +157,47 @@ async function llmTranslateBatch(
   }
 
   return map;
+}
+
+// ---------------------------------------------------------------------------
+// 背景翻譯：單一隊列、分批、失敗後冷卻，避免讀取請求被 LLM 拖慢或重複轟炸
+// ---------------------------------------------------------------------------
+const BG_CHUNK = 30;
+const FAIL_COOLDOWN_MS = 10 * 60 * 1000;
+const pendingNames = new Set<string>();
+const failedUntil = new Map<string, number>();
+let bgChain: Promise<void> = Promise.resolve();
+
+function scheduleBackgroundTranslation(names: string[]): void {
+  const now = Date.now();
+  const fresh = names.filter(
+    (n) => !pendingNames.has(n) && (failedUntil.get(n) ?? 0) <= now
+  );
+  if (fresh.length === 0) return;
+  fresh.forEach((n) => pendingNames.add(n));
+
+  for (let i = 0; i < fresh.length; i += BG_CHUNK) {
+    const chunk = fresh.slice(i, i + BG_CHUNK);
+    bgChain = bgChain.then(async () => {
+      try {
+        const translated = await llmTranslateBatch(chunk);
+        const toSave: { nameZh: string; nameEn: string }[] = [];
+        for (const name of chunk) {
+          const en = translated.get(name);
+          if (en) {
+            memoryCache.set(name, en);
+            toSave.push({ nameZh: name, nameEn: en });
+          } else {
+            failedUntil.set(name, Date.now() + FAIL_COOLDOWN_MS);
+          }
+        }
+        if (toSave.length > 0) await saveTranslations(toSave);
+      } catch (error) {
+        console.warn("[Translation] background translate failed:", error);
+        chunk.forEach((n) => failedUntil.set(n, Date.now() + FAIL_COOLDOWN_MS));
+      } finally {
+        chunk.forEach((n) => pendingNames.delete(n));
+      }
+    });
+  }
 }

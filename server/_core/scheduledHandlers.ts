@@ -1,25 +1,23 @@
+import { timingSafeEqual } from "node:crypto";
 import { Request, Response } from "express";
-import { sdk } from "./sdk";
+import { ENV } from "./env";
 import { crawlDriveTree, invalidateCache } from "./googleDrive";
 import { upsertPhotoCacheBatch, prunePhotoCache, upsertRegionCacheBatch } from "../db";
 import type { InsertPhotoCache, InsertRegionCache } from "../../drizzle/schema";
 
-/**
- * Daily Google Drive sync handler.
- * Triggered by Heartbeat at scheduled time (default: daily at 03:00 UTC).
- * Path: /api/scheduled/syncGoogleDrive
- *
- * This handler clears the in-memory cache and re-crawls the Drive folder so
- * that the next user request gets fresh data.
- */
-export async function syncGoogleDriveHandler(req: Request, res: Response) {
-  try {
-    // Authenticate as cron request
-    const user = await sdk.authenticateRequest(req);
-    if (!user.isCron || !user.taskUid) {
-      return res.status(403).json({ error: "cron-only endpoint" });
-    }
+function isValidCronSecret(req: Request): boolean {
+  if (!ENV.cronSecret) return false; // fail closed when not configured
+  const header = req.headers.authorization ?? "";
+  const provided = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const a = Buffer.from(provided);
+  const b = Buffer.from(ENV.cronSecret);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
+let syncing = false;
+
+/** Re-crawl Google Drive and refresh photo_cache / region_cache. */
+export async function runDriveSync() {
     console.log(
       `[ScheduledSync] Starting daily Google Drive sync at ${new Date().toISOString()}`
     );
@@ -53,10 +51,12 @@ export async function syncGoogleDriveHandler(req: Request, res: Response) {
 
     // Prune deleted photos
     const activeFileIds = new Set(photoRows.map((r) => r.fileId));
-    const deletedCount = await prunePhotoCache(activeFileIds);
+    const failedIds = new Set(tree.failedFolderIds ?? []);
+    // 只有完整爬取成功才 prune；局部失敗時保留舊快取，避免誤刪
+    const deletedCount = failedIds.size === 0 ? await prunePhotoCache(activeFileIds) : 0;
 
     // Build and upsert region_cache rows
-    const regionRows: InsertRegionCache[] = tree.regions.map((region) => {
+    const regionRows: InsertRegionCache[] = tree.regions.filter((r) => !failedIds.has(r.id)).map((region) => {
       const uniqueRestaurants = new Set(region.photos.map((p) => p.restaurantName));
       const subRegionNames = Array.from(
         new Set(region.photos.map((p) => p.subRegion).filter((s): s is string => !!s))
@@ -74,27 +74,57 @@ export async function syncGoogleDriveHandler(req: Request, res: Response) {
     const syncResult = {
       success: true,
       syncedAt: new Date().toISOString(),
-      taskUid: user.taskUid,
       totalRegions: tree.regions.length,
       totalPhotos: photoRows.length,
       deletedPhotos: deletedCount,
+      partial: failedIds.size > 0,
     };
+    console.log(`[ScheduledSync] Sync completed`, syncResult);
+    return syncResult;
+}
 
-    console.log(`[ScheduledSync] Sync completed successfully`, syncResult);
+/** Start an in-process daily sync at 03:00 UTC (11:00 Hong Kong). */
+export function startDailySyncScheduler() {
+  if (!ENV.dailySyncEnabled) return;
+  const scheduleNext = () => {
+    const now = new Date();
+    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 0, 0));
+    if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+    setTimeout(async () => {
+      try {
+        if (!syncing) {
+          syncing = true;
+          await runDriveSync();
+        }
+      } catch (error) {
+        console.error("[ScheduledSync] Daily sync failed:", error);
+      } finally {
+        syncing = false;
+        scheduleNext();
+      }
+    }, next.getTime() - now.getTime()).unref();
+  };
+  scheduleNext();
+}
 
-    return res.json({ ok: true, result: syncResult });
+/** POST /api/scheduled/syncGoogleDrive — protected by `Authorization: Bearer $CRON_SECRET`. */
+export async function syncGoogleDriveHandler(req: Request, res: Response) {
+  if (!isValidCronSecret(req)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  if (syncing) {
+    return res.status(409).json({ error: "sync already running" });
+  }
+  syncing = true;
+  try {
+    const result = await runDriveSync();
+    return res.json({ ok: true, result });
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : "Unknown error";
-    const errorStack = error instanceof Error ? error.stack : undefined;
     console.error(`[ScheduledSync] Sync failed:`, error);
-
     return res.status(500).json({
-      error: errorMsg,
-      stack: errorStack,
-      context: {
-        url: req.url,
-        timestamp: new Date().toISOString(),
-      },
+      error: error instanceof Error ? error.message : "Unknown error",
     });
+  } finally {
+    syncing = false;
   }
 }

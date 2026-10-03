@@ -86,3 +86,52 @@ describe("translateRestaurantNames", () => {
     expect(result.has(zh)).toBe(false);
   });
 });
+
+describe("translateRestaurantNames (wait:false)", () => {
+  beforeEach(() => {
+    getTranslationsMock.mockReset();
+    saveTranslationsMock.mockReset();
+    invokeLLMMock.mockReset();
+  });
+
+  it("不等 LLM：先回傳快取，缺失者喺背景翻譯並寫回", async () => {
+    const hit = "快取命中_" + Math.random().toString(36).slice(2);
+    const miss = "背景翻譯_" + Math.random().toString(36).slice(2);
+    getTranslationsMock.mockResolvedValue(new Map([[hit, "Cached"]]));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    invokeLLMMock.mockImplementation(async () => {
+      await gate;
+      return llmResponse([{ zh: miss, en: "Background" }]);
+    });
+
+    const result = await translateRestaurantNames([hit, miss], { wait: false });
+    // 立即回傳，LLM 仲未完成
+    expect(result.get(hit)).toBe("Cached");
+    expect(result.has(miss)).toBe(false);
+
+    release();
+    await vi.waitFor(() =>
+      expect(saveTranslationsMock).toHaveBeenCalledWith([{ nameZh: miss, nameEn: "Background" }])
+    );
+    // 下次讀取已經有（記憶體快取）
+    const again = await translateRestaurantNames([miss], { wait: false });
+    expect(again.get(miss)).toBe("Background");
+  });
+
+  it("同一名稱喺翻譯進行中唔會重複呼叫 LLM", async () => {
+    const miss = "重複排隊_" + Math.random().toString(36).slice(2);
+    getTranslationsMock.mockResolvedValue(new Map());
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    invokeLLMMock.mockImplementation(async () => {
+      await gate;
+      return llmResponse([{ zh: miss, en: "Once" }]);
+    });
+    await translateRestaurantNames([miss], { wait: false });
+    await translateRestaurantNames([miss], { wait: false });
+    release();
+    await vi.waitFor(() => expect(saveTranslationsMock).toHaveBeenCalled());
+    expect(invokeLLMMock).toHaveBeenCalledTimes(1);
+  });
+});

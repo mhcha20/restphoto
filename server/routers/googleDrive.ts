@@ -1,5 +1,5 @@
 import { router, protectedProcedure, approvedProcedure, adminProcedure } from "../_core/trpc";
-import { setManualTranslation, upsertPhotoCacheBatch, prunePhotoCache, getPhotosCached, getPhotoCacheStats, upsertRegionCacheBatch, getRegionsCached, getSubRegionsCached } from "../db";
+import { setManualTranslation, upsertPhotoCacheBatch, prunePhotoCache, getPhotosCached, getPhotoCacheStats, getRestaurantNamesCached, getEnvironmentsCached, upsertRegionCacheBatch, getRegionsCached, getSubRegionsCached } from "../db";
 import { clearTranslationMemoryCache } from "../_core/translation";
 import { z } from "zod";
 import {
@@ -135,9 +135,11 @@ export const googleDriveRouter = router({
       await upsertPhotoCacheBatch(rows);
       // 清理孤兒記錄（Drive 上已刪除的相片）
       const activeFileIds = new Set(rows.map((r) => r.fileId));
-      const deletedCount = await prunePhotoCache(activeFileIds);
+      const failedIds = new Set(tree.failedFolderIds ?? []);
+      // 只有完整爬取成功才 prune；局部失敗時保留舊快取，避免誤刪
+      const deletedCount = failedIds.size === 0 ? await prunePhotoCache(activeFileIds) : 0;
       // 同步地區快取（讓 getRegions 可從 DB 即時讀取）
-      const regionRows: InsertRegionCache[] = tree.regions.map((region) => {
+      const regionRows: InsertRegionCache[] = tree.regions.filter((r) => !failedIds.has(r.id)).map((region) => {
         const uniqueRestaurants = new Set(region.photos.map((p) => p.restaurantName));
         const subRegionNames = Array.from(
           new Set(region.photos.map((p) => p.subRegion).filter((s): s is string => !!s))
@@ -210,7 +212,7 @@ export const googleDriveRouter = router({
 
       // 附帶英文名（自動翻譯 + 快取）
       const names = Array.from(new Set(result.items.map((p) => p.restaurantName)));
-      const enMap = await translateRestaurantNames(names);
+      const enMap = await translateRestaurantNames(names, { wait: false });
 
       const items = result.items.map((p) => ({
         id: p.fileId,
@@ -334,7 +336,7 @@ export const googleDriveRouter = router({
         });
         // 附帶英文名（自動翻譯 + 快取）
         const names = photos.map((p) => p.restaurantName);
-        const enMap = await translateRestaurantNames(names);
+        const enMap = await translateRestaurantNames(names, { wait: false });
         const withEn = photos
           .filter((p) => matchEnv(p.environment))
           .map((p) => ({
@@ -403,10 +405,16 @@ export const googleDriveRouter = router({
       };
 
       try {
-        const photos = await listPhotos({ regionId, subRegion });
-        const list = dedupe(photos);
-        // 附帶英文名（自動翻譯 + 快取）
-        const enMap = await translateRestaurantNames(list.map((r) => r.name));
+        // 優先讀 photo_cache（資料庫，毫秒級）；快取未同步先退回爬 Drive
+        let list: { name: string }[];
+        const cachedNames = await getRestaurantNamesCached({ regionId, subRegion });
+        if (cachedNames.length > 0 || (await getPhotoCacheStats()).totalPhotos > 0) {
+          list = dedupe(cachedNames.map((restaurantName) => ({ restaurantName })));
+        } else {
+          list = dedupe(await listPhotos({ regionId, subRegion }));
+        }
+        // 附帶英文名（只讀快取；缺失者喺背景翻譯，唔阻住回應）
+        const enMap = await translateRestaurantNames(list.map((r) => r.name), { wait: false });
         return list.map((r) => ({
           name: r.name,
           nameEn: enMap.get(r.name.trim()) ?? null,
@@ -438,6 +446,16 @@ export const googleDriveRouter = router({
     .query(async ({ input }) => {
       const regionId = input?.regionId ?? null;
       try {
+        const cached = await getEnvironmentsCached({ regionId });
+        if (cached.environments.length > 0 || cached.hasIndoor) {
+          return {
+            environments: sortEnvironments(cached.environments),
+            hasIndoor: cached.hasIndoor,
+          };
+        }
+        if ((await getPhotoCacheStats()).totalPhotos > 0) {
+          return { environments: [] as string[], hasIndoor: false };
+        }
         const photos = await listPhotos({ regionId });
         const set = new Set<string>();
         let hasIndoor = false;

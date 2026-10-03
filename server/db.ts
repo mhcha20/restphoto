@@ -18,6 +18,10 @@ export async function getDb() {
   return _db;
 }
 
+function isAdminEmail(email: string | null | undefined): boolean {
+  return !!ENV.adminEmail && !!email && email.trim().toLowerCase() === ENV.adminEmail;
+}
+
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) {
     throw new Error("User openId is required for upsert");
@@ -55,7 +59,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     if (user.role !== undefined) {
       values.role = user.role;
       updateSet.role = user.role;
-    } else if (user.openId === ENV.ownerOpenId) {
+    } else if (isAdminEmail(user.email)) {
       values.role = 'admin';
       updateSet.role = 'admin';
     }
@@ -64,7 +68,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     if (user.accessStatus !== undefined) {
       values.accessStatus = user.accessStatus;
       updateSet.accessStatus = user.accessStatus;
-    } else if (user.openId === ENV.ownerOpenId) {
+    } else if (isAdminEmail(user.email)) {
       values.accessStatus = 'approved';
       updateSet.accessStatus = 'approved';
     }
@@ -567,6 +571,55 @@ export async function getPhotosCached(opts: {
   } catch (error) {
     console.warn("[Database] getPhotosCached failed:", error);
     return { items: [], total: 0, hasMore: false };
+  }
+}
+
+/**
+ * 從 photo_cache 取得去重餐廳名稱（可按地區／子地區）。
+ * 取代原本「爬整個 Drive 目錄樹」嘅做法，毫秒級回應。
+ */
+export async function getRestaurantNamesCached(opts: {
+  regionId?: string | null;
+  subRegion?: string | null;
+}): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions: ReturnType<typeof eq>[] = [];
+  if (opts.regionId) conditions.push(eq(photoCache.regionId, opts.regionId));
+  if (opts.subRegion) conditions.push(eq(photoCache.subRegionName, opts.subRegion));
+  try {
+    const rows = await db
+      .selectDistinct({ name: photoCache.restaurantName })
+      .from(photoCache)
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
+    return rows.map((r) => r.name.trim()).filter((n) => n.length > 0);
+  } catch (error) {
+    console.warn("[Database] getRestaurantNamesCached failed:", error);
+    return [];
+  }
+}
+
+/** 從 photo_cache 取得（可按地區）去重環境清單，以及是否存在室內（無環境）相片。 */
+export async function getEnvironmentsCached(opts: {
+  regionId?: string | null;
+}): Promise<{ environments: string[]; hasIndoor: boolean }> {
+  const db = await getDb();
+  if (!db) return { environments: [], hasIndoor: false };
+  try {
+    const rows = await db
+      .selectDistinct({ environment: photoCache.environment })
+      .from(photoCache)
+      .where(opts.regionId ? eq(photoCache.regionId, opts.regionId) : undefined);
+    const environments: string[] = [];
+    let hasIndoor = false;
+    for (const r of rows) {
+      if (r.environment === null || r.environment === "") hasIndoor = true;
+      else environments.push(r.environment);
+    }
+    return { environments, hasIndoor };
+  } catch (error) {
+    console.warn("[Database] getEnvironmentsCached failed:", error);
+    return { environments: [], hasIndoor: false };
   }
 }
 

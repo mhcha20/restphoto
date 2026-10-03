@@ -1,21 +1,8 @@
 /**
- * Image generation helper using internal ImageService
- *
- * Example usage:
- *   const { url: imageUrl } = await generateImage({
- *     prompt: "A serene landscape with mountains"
- *   });
- *
- * For editing:
- *   const { url: imageUrl } = await generateImage({
- *     prompt: "Add a rainbow to this landscape",
- *     originalImages: [{
- *       url: "https://example.com/original.jpg",
- *       mimeType: "image/jpeg"
- *     }]
- *   });
+ * Image generation / editing via OpenRouter (image-capable chat model).
+ * Returns a data URL so no object storage is required; the original photo on
+ * Google Drive is never modified.
  */
-import { storagePut } from "server/storage";
 import { ENV } from "./env";
 
 export type GenerateImageOptions = {
@@ -34,33 +21,29 @@ export type GenerateImageResponse = {
 export async function generateImage(
   options: GenerateImageOptions
 ): Promise<GenerateImageResponse> {
-  if (!ENV.forgeApiUrl) {
-    throw new Error("BUILT_IN_FORGE_API_URL is not configured");
-  }
-  if (!ENV.forgeApiKey) {
-    throw new Error("BUILT_IN_FORGE_API_KEY is not configured");
+  if (!ENV.openRouterApiKey) {
+    throw new Error("OPENROUTER_API_KEY is not configured");
   }
 
-  // Build the full URL by appending the service path to the base URL
-  const baseUrl = ENV.forgeApiUrl.endsWith("/")
-    ? ENV.forgeApiUrl
-    : `${ENV.forgeApiUrl}/`;
-  const fullUrl = new URL(
-    "images.v1.ImageService/GenerateImage",
-    baseUrl
-  ).toString();
+  const content: Array<Record<string, unknown>> = [
+    { type: "text", text: options.prompt },
+  ];
+  for (const img of options.originalImages ?? []) {
+    const url =
+      img.url ?? (img.b64Json ? `data:${img.mimeType ?? "image/jpeg"};base64,${img.b64Json}` : undefined);
+    if (url) content.push({ type: "image_url", image_url: { url } });
+  }
 
-  const response = await fetch(fullUrl, {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
-      accept: "application/json",
       "content-type": "application/json",
-      "connect-protocol-version": "1",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
+      authorization: `Bearer ${ENV.openRouterApiKey}`,
     },
     body: JSON.stringify({
-      prompt: options.prompt,
-      original_images: options.originalImages || [],
+      model: ENV.openRouterImageModel,
+      modalities: ["image", "text"],
+      messages: [{ role: "user", content }],
     }),
   });
 
@@ -72,21 +55,10 @@ export async function generateImage(
   }
 
   const result = (await response.json()) as {
-    image: {
-      b64Json: string;
-      mimeType: string;
-    };
+    choices?: Array<{
+      message?: { images?: Array<{ image_url?: { url?: string } }> };
+    }>;
   };
-  const base64Data = result.image.b64Json;
-  const buffer = Buffer.from(base64Data, "base64");
-
-  // Save to S3
-  const { url } = await storagePut(
-    `generated/${Date.now()}.png`,
-    buffer,
-    result.image.mimeType
-  );
-  return {
-    url,
-  };
+  const url = result.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+  return { url };
 }

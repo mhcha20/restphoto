@@ -1,5 +1,5 @@
 import { memo, useState } from "react";
-import { ImageOff, Loader2 } from "lucide-react";
+import { ImageOff } from "lucide-react";
 
 interface OptimizedImageProps {
   src: string;
@@ -18,17 +18,15 @@ function OptimizedImageBase({ src, alt, className = "", center = false }: Optimi
   const [hasError, setHasError] = useState(false);
 
   return (
-    <div className={`relative w-full h-full bg-slate-100${center ? " flex items-center justify-center" : ""}`}>
+    <div className={`relative w-full h-full${center ? " flex items-center justify-center" : ""}`}>
       {/* Loading state */}
       {!isLoaded && !hasError && (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-100">
-          <Loader2 className="animate-spin text-slate-400" size={24} />
-        </div>
+        <div className="absolute inset-0 skeleton" aria-hidden="true" />
       )}
 
       {/* Error state */}
       {hasError && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-100 text-slate-400">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-stone-100 text-stone-400">
           <ImageOff size={32} />
           <p className="text-xs mt-2">圖片無法載入</p>
         </div>

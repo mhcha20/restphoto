@@ -585,44 +585,56 @@ export default function RestaurantList() {
                     )
                   : null;
 
+              const inList = deliveryList.some((d) => d.nameZh === r.nameZh);
+              const navHref = hasGps
+                ? `https://maps.google.com/?q=${r.lat},${r.lng}`
+                : r.address
+                  ? `https://maps.google.com/?q=${encodeURIComponent(r.address)}`
+                  : null;
+
               return (
                 <div
                   key={r.nameZh}
-                  className="bg-white rounded-xl border border-stone-200 px-4 py-3 flex items-start gap-3 hover:shadow-sm transition-shadow"
+                  className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-stone-200/70 transition-shadow hover:shadow-md"
                 >
-                  {/* Rank / index */}
-                  {userCoords && (
-                    <span className="mt-0.5 text-xs font-mono text-stone-400 w-5 shrink-0 text-right">
-                      {idx + 1}
-                    </span>
-                  )}
-
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-stone-800">{r.nameZh}</span>
-                      {r.nameEn && (
-                        <span className="text-xs text-stone-500">{r.nameEn}</span>
-                      )}
-                      {r.isVerified === 1 && (
-                        <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
-                      )}
-                    </div>
-                    {r.region && (
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <Badge variant="secondary" className="text-xs px-1.5 py-0 h-4">
-                          {r.subRegion ?? r.region}
-                        </Badge>
+                  {/* 店名 + 距離 */}
+                  <div className="flex items-start gap-3">
+                    {userCoords && (
+                      <span className="mt-0.5 w-5 shrink-0 text-right font-mono text-xs text-stone-400">
+                        {idx + 1}
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <h2 className="text-[15px] font-semibold text-stone-900">{r.nameZh}</h2>
+                        {r.isVerified === 1 && (
+                          <CheckCircle2 size={14} className="shrink-0 text-emerald-500" aria-label="已核實" />
+                        )}
                       </div>
+                      {r.nameEn && <p className="text-xs text-stone-400">{r.nameEn}</p>}
+                    </div>
+                    {distance !== null && (
+                      <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                        {formatDistance(distance)}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 地區 + 地址 */}
+                  <div className="mt-2 space-y-1.5">
+                    {r.region && (
+                      <Badge variant="secondary" className="h-5 rounded-full px-2 text-[11px] font-normal">
+                        {r.subRegion ?? r.region}
+                      </Badge>
                     )}
                     {r.address ? (
-                      <p className="text-sm text-stone-600 mt-1 flex items-start gap-1">
-                        <MapPin size={13} className="mt-0.5 shrink-0 text-stone-400" />
+                      <p className="flex items-start gap-1.5 text-sm text-stone-600">
+                        <MapPin size={14} className="mt-0.5 shrink-0 text-primary/70" />
                         <span>{r.address}</span>
                       </p>
                     ) : (
                       <button
-                        className="text-xs text-amber-600 mt-1 flex items-center gap-1 hover:underline"
+                        className="flex items-center gap-1 text-xs text-amber-600 hover:underline"
                         onClick={() => handleFetchSingle(r)}
                         disabled={fetchAddressMutation.isPending}
                       >
@@ -630,65 +642,52 @@ export default function RestaurantList() {
                         未有地址，點此 AI 搜尋
                       </button>
                     )}
-                    {distance !== null && (
-                      <p className="text-xs text-emerald-700 mt-0.5 font-medium">
-                        距你 {formatDistance(distance)}
-                      </p>
-                    )}
                   </div>
 
-                  {/* Actions */}
-                  <div className="flex flex-col items-end gap-2 shrink-0">
-                    {/* 編輯地址按鈕 */}
-                    <button
-                      onClick={() => openEdit(r)}
-                      className="inline-flex items-center gap-1 text-xs font-medium text-stone-600 bg-stone-50 hover:bg-stone-100 border border-stone-200 rounded px-2 py-0.5 transition-colors"
-                    >
-                      <Pencil size={12} /> 編輯
-                    </button>
-                    {/* 加入待送清單 */}
-                    <button
-                      onClick={() => addToDelivery(r)}
-                      className={`inline-flex items-center gap-1 text-xs font-medium rounded px-2 py-0.5 transition-colors border ${
-                        deliveryList.some((d) => d.nameZh === r.nameZh)
-                          ? "text-emerald-700 bg-emerald-50 border-emerald-200 cursor-default"
-                          : "text-stone-600 bg-stone-50 hover:bg-stone-100 border-stone-200"
-                      }`}
-                    >
-                      {deliveryList.some((d) => d.nameZh === r.nameZh) ? (
-                        <><CheckCircle2 size={12} /> 已加入</>
-                      ) : (
-                        <><ShoppingBag size={12} /> 加入待送</>
-                      )}
-                    </button>
-                    {/* 睇相片按鈕 */}
+                  {/* 操作列：導航為主要動作 */}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {navHref ? (
+                      <a
+                        href={navHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex h-9 items-center gap-1.5 rounded-full bg-primary px-4 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+                      >
+                        <Navigation size={14} /> 導航
+                      </a>
+                    ) : (
+                      <span className="inline-flex h-9 items-center gap-1.5 rounded-full bg-stone-100 px-4 text-sm text-stone-400">
+                        <Navigation size={14} /> 導航
+                      </span>
+                    )}
                     <Link
                       href={`/dashboard?restaurant=${encodeURIComponent(r.nameZh)}${r.region ? `&region=${encodeURIComponent(r.region)}` : ''}`}
-                      className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded px-2 py-0.5 transition-colors"
+                      className="inline-flex h-9 items-center gap-1.5 rounded-full border border-stone-200 bg-white px-3.5 text-sm font-medium text-stone-700 transition-colors hover:border-primary/50 hover:text-primary"
                     >
-                      <Images size={12} /> 睇相片
+                      <Images size={14} /> 睇相片
                     </Link>
-                    {/* 導航按鈕 */}
-                    {hasGps && (
-                      <a
-                        href={`https://maps.google.com/?q=${r.lat},${r.lng}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
-                      >
-                        <ExternalLink size={12} /> 導航
-                      </a>
-                    )}
-                    {!hasGps && r.address && (
-                      <a
-                        href={`https://maps.google.com/?q=${encodeURIComponent(r.address)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
-                      >
-                        <ExternalLink size={12} /> 導航
-                      </a>
-                    )}
+                    <button
+                      onClick={() => addToDelivery(r)}
+                      disabled={inList}
+                      className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition-colors ${
+                        inList
+                          ? "cursor-default border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-stone-200 bg-white text-stone-700 hover:border-primary/50 hover:text-primary"
+                      }`}
+                    >
+                      {inList ? (
+                        <><CheckCircle2 size={14} /> 已加入</>
+                      ) : (
+                        <><ShoppingBag size={14} /> 待送</>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => openEdit(r)}
+                      aria-label="編輯地址"
+                      className="ml-auto inline-flex h-9 w-9 items-center justify-center rounded-full text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-700"
+                    >
+                      <Pencil size={15} />
+                    </button>
                   </div>
                 </div>
               );
