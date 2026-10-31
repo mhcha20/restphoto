@@ -1,3 +1,4 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { ENV } from "./env";
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
@@ -114,213 +115,113 @@ const ensureArray = (
   value: MessageContent | MessageContent[]
 ): MessageContent[] => (Array.isArray(value) ? value : [value]);
 
-const normalizeContentPart = (
-  part: MessageContent
-): TextContent | ImageContent | FileContent => {
-  if (typeof part === "string") {
-    return { type: "text", text: part };
-  }
+const toPart = (part: MessageContent): TextContent | ImageContent | FileContent =>
+  typeof part === "string" ? { type: "text", text: part } : part;
 
-  if (part.type === "text") {
-    return part;
+let client: Anthropic | null = null;
+const getClient = (): Anthropic => {
+  if (!ENV.anthropicApiKey) {
+    throw new Error("ANTHROPIC_API_KEY is not configured");
   }
+  client ??= new Anthropic({ apiKey: ENV.anthropicApiKey });
+  return client;
+};
+
+/** OpenAI-style content part -> Anthropic content block. */
+const toBlock = (
+  part: TextContent | ImageContent | FileContent
+): Anthropic.ContentBlockParam => {
+  if (part.type === "text") return { type: "text", text: part.text };
 
   if (part.type === "image_url") {
-    return part;
-  }
-
-  if (part.type === "file_url") {
-    return part;
-  }
-
-  throw new Error("Unsupported message content part");
-};
-
-const normalizeMessage = (message: Message) => {
-  const { role, name, tool_call_id } = message;
-
-  if (role === "tool" || role === "function") {
-    const content = ensureArray(message.content)
-      .map(part => (typeof part === "string" ? part : JSON.stringify(part)))
-      .join("\n");
-
-    return {
-      role,
-      name,
-      tool_call_id,
-      content,
-    };
-  }
-
-  const contentParts = ensureArray(message.content).map(normalizeContentPart);
-
-  // If there's only text content, collapse to a single string for compatibility
-  if (contentParts.length === 1 && contentParts[0].type === "text") {
-    return {
-      role,
-      name,
-      content: contentParts[0].text,
-    };
-  }
-
-  return {
-    role,
-    name,
-    content: contentParts,
-  };
-};
-
-const normalizeToolChoice = (
-  toolChoice: ToolChoice | undefined,
-  tools: Tool[] | undefined
-): "none" | "auto" | ToolChoiceExplicit | undefined => {
-  if (!toolChoice) return undefined;
-
-  if (toolChoice === "none" || toolChoice === "auto") {
-    return toolChoice;
-  }
-
-  if (toolChoice === "required") {
-    if (!tools || tools.length === 0) {
-      throw new Error(
-        "tool_choice 'required' was provided but no tools were configured"
-      );
+    const url = part.image_url.url;
+    const data = /^data:(image\/(?:jpeg|png|gif|webp));base64,(.+)$/.exec(url);
+    if (data) {
+      return {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: data[1] as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+          data: data[2],
+        },
+      };
     }
-
-    if (tools.length > 1) {
-      throw new Error(
-        "tool_choice 'required' needs a single tool or specify the tool name explicitly"
-      );
-    }
-
-    return {
-      type: "function",
-      function: { name: tools[0].function.name },
-    };
+    return { type: "image", source: { type: "url", url } };
   }
 
-  if ("name" in toolChoice) {
-    return {
-      type: "function",
-      function: { name: toolChoice.name },
-    };
+  if (part.file_url.mime_type === "application/pdf") {
+    return { type: "document", source: { type: "url", url: part.file_url.url } };
   }
-
-  return toolChoice;
+  throw new Error(`Unsupported file type for Claude: ${part.file_url.mime_type ?? "unknown"}`);
 };
 
-const resolveApiUrl = () => "https://openrouter.ai/api/v1/chat/completions";
-
-const assertApiKey = () => {
-  if (!ENV.openRouterApiKey) {
-    throw new Error("OPENROUTER_API_KEY is not configured");
-  }
-};
-
-const normalizeResponseFormat = ({
-  responseFormat,
-  response_format,
-  outputSchema,
-  output_schema,
-}: {
-  responseFormat?: ResponseFormat;
-  response_format?: ResponseFormat;
-  outputSchema?: OutputSchema;
-  output_schema?: OutputSchema;
-}):
-  | { type: "json_schema"; json_schema: JsonSchema }
-  | { type: "text" }
-  | { type: "json_object" }
-  | undefined => {
-  const explicitFormat = responseFormat || response_format;
-  if (explicitFormat) {
-    if (
-      explicitFormat.type === "json_schema" &&
-      !explicitFormat.json_schema?.schema
-    ) {
-      throw new Error(
-        "responseFormat json_schema requires a defined schema object"
-      );
-    }
-    return explicitFormat;
-  }
-
-  const schema = outputSchema || output_schema;
-  if (!schema) return undefined;
-
-  if (!schema.name || !schema.schema) {
-    throw new Error("outputSchema requires both name and schema");
-  }
-
-  return {
-    type: "json_schema",
-    json_schema: {
-      name: schema.name,
-      schema: schema.schema,
-      ...(typeof schema.strict === "boolean" ? { strict: schema.strict } : {}),
-    },
-  };
-};
-
+/**
+ * Calls Claude through the Anthropic Messages API and returns an OpenAI-shaped
+ * result so existing callers (translation, address lookup, photo analysis) keep working.
+ * Structured output (`response_format: json_schema`) uses `output_config.format`.
+ */
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  assertApiKey();
+  if (params.tools && params.tools.length > 0) {
+    throw new Error("invokeLLM: tools are not supported by the Claude adapter");
+  }
 
-  const {
+  const system: string[] = [];
+  const messages: Anthropic.MessageParam[] = [];
+  for (const m of params.messages) {
+    const parts = ensureArray(m.content).map(toPart);
+    if (m.role === "system") {
+      system.push(
+        parts.map((p) => (p.type === "text" ? p.text : "")).filter(Boolean).join("\n")
+      );
+      continue;
+    }
+    if (m.role !== "user" && m.role !== "assistant") {
+      throw new Error(`invokeLLM: unsupported role "${m.role}"`);
+    }
+    messages.push({ role: m.role, content: parts.map(toBlock) });
+  }
+
+  const format = params.responseFormat ?? params.response_format;
+  const schema = params.outputSchema ?? params.output_schema;
+  const jsonSchema =
+    format?.type === "json_schema" ? format.json_schema.schema : schema?.schema;
+
+  const response = await getClient().messages.create({
+    model: ENV.anthropicModel,
+    max_tokens: params.maxTokens ?? params.max_tokens ?? 16000,
+    ...(system.length > 0 ? { system: system.join("\n\n") } : {}),
     messages,
-    tools,
-    toolChoice,
-    tool_choice,
-    outputSchema,
-    output_schema,
-    responseFormat,
-    response_format,
-  } = params;
-
-  const payload: Record<string, unknown> = {
-    model: ENV.openRouterModel,
-    messages: messages.map(normalizeMessage),
-  };
-
-  if (tools && tools.length > 0) {
-    payload.tools = tools;
-  }
-
-  const normalizedToolChoice = normalizeToolChoice(
-    toolChoice || tool_choice,
-    tools
-  );
-  if (normalizedToolChoice) {
-    payload.tool_choice = normalizedToolChoice;
-  }
-
-  payload.max_tokens = 8192
-
-  const normalizedResponseFormat = normalizeResponseFormat({
-    responseFormat,
-    response_format,
-    outputSchema,
-    output_schema,
-  });
-
-  if (normalizedResponseFormat) {
-    payload.response_format = normalizedResponseFormat;
-  }
-
-  const response = await fetch(resolveApiUrl(), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.openRouterApiKey}`,
+    // Low effort is plenty for short extraction / translation tasks.
+    output_config: {
+      effort: "low",
+      ...(jsonSchema ? { format: { type: "json_schema", schema: jsonSchema } } : {}),
     },
-    body: JSON.stringify(payload),
-  });
+  } as Anthropic.MessageCreateParamsNonStreaming);
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
-    );
+  if (response.stop_reason === "refusal") {
+    throw new Error("LLM declined the request");
   }
 
-  return (await response.json()) as InvokeResult;
+  const text = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+
+  return {
+    id: response.id,
+    created: Math.floor(Date.now() / 1000),
+    model: response.model,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: text },
+        finish_reason: response.stop_reason,
+      },
+    ],
+    usage: {
+      prompt_tokens: response.usage.input_tokens,
+      completion_tokens: response.usage.output_tokens,
+      total_tokens: response.usage.input_tokens + response.usage.output_tokens,
+    },
+  };
 }

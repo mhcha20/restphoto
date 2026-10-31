@@ -11,9 +11,11 @@ export const ENV = {
   // Google Drive
   googleDriveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID ?? "",
   googleDriveApiKey: process.env.GOOGLE_DRIVE_API_KEY ?? "",
-  // OpenRouter (LLM + image generation)
+  // Anthropic (translation, address inference, photo analysis)
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
+  anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-opus-5-5",
+  // OpenRouter (image effects only: Claude does not generate images)
   openRouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
-  openRouterModel: process.env.OPENROUTER_MODEL ?? "google/gemini-2.5-flash",
   openRouterImageModel:
     process.env.OPENROUTER_IMAGE_MODEL ?? "google/gemini-2.5-flash-image",
   // Google Maps (server-side Geocoding/Places)
